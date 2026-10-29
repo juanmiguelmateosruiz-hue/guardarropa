@@ -28,11 +28,29 @@ import {
   seedSampleWardrobe
 } from './utils/api';
 
+import {
+  syncAndFetchWardrobe,
+  syncAndFetchOutfits,
+  getCachedWardrobe,
+  getCachedOutfits,
+  deleteGarmentFromAllTiers,
+  persistSavedOutfit,
+  saveCachedWardrobe
+} from './utils/cloudSync';
+
 export default function App() {
-  const [currentUserEmail, setCurrentUserEmail] = useState<string>('');
+  const [currentUserEmail, setCurrentUserEmail] = useState<string>(() => {
+    return localStorage.getItem('smartwardrobe_user_email') || '';
+  });
   const [activeTab, setActiveTab] = useState<'wardrobe' | 'generator' | 'lookbook'>('wardrobe');
-  const [wardrobe, setWardrobe] = useState<GarmentItem[]>([]);
-  const [outfits, setOutfits] = useState<SavedOutfit[]>([]);
+  const [wardrobe, setWardrobe] = useState<GarmentItem[]>(() => {
+    const email = localStorage.getItem('smartwardrobe_user_email');
+    return email ? getCachedWardrobe(email) : [];
+  });
+  const [outfits, setOutfits] = useState<SavedOutfit[]>(() => {
+    const email = localStorage.getItem('smartwardrobe_user_email');
+    return email ? getCachedOutfits(email) : [];
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
 
@@ -59,7 +77,7 @@ export default function App() {
   // Check saved session & Yoni Mikel unlock on load
   useEffect(() => {
     const savedEmail = localStorage.getItem('smartwardrobe_user_email');
-    if (savedEmail) {
+    if (savedEmail && !currentUserEmail) {
       setCurrentUserEmail(savedEmail);
     }
     const unlocked = localStorage.getItem('smartwardrobe_yoni_unlocked') === 'true';
@@ -80,24 +98,38 @@ export default function App() {
   useEffect(() => {
     if (!currentUserEmail) return;
 
-    const loadData = async () => {
+    // Load instantly from local cache to prevent ANY flash to 0 items
+    const cachedItems = getCachedWardrobe(currentUserEmail);
+    if (cachedItems.length > 0) {
+      setWardrobe(cachedItems);
+    }
+    const cachedLooks = getCachedOutfits(currentUserEmail);
+    if (cachedLooks.length > 0) {
+      setOutfits(cachedLooks);
+    }
+
+    // Sync in background with Supabase Cloud DB and Server
+    const syncData = async () => {
       setIsLoading(true);
       try {
-        const [items, userOutfits] = await Promise.all([
-          fetchUserWardrobe(currentUserEmail),
-          fetchUserOutfits(currentUserEmail),
+        const [cloudItems, cloudOutfits] = await Promise.all([
+          syncAndFetchWardrobe(currentUserEmail),
+          syncAndFetchOutfits(currentUserEmail),
         ]);
-        setWardrobe(items);
-        setOutfits(userOutfits);
+        if (cloudItems.length > 0) {
+          setWardrobe(cloudItems);
+        }
+        if (cloudOutfits.length > 0) {
+          setOutfits(cloudOutfits);
+        }
       } catch (err: any) {
-        console.error('Error loading data:', err);
-        showToast('Conectado en modo sin conexión / caché local', 'success');
+        console.warn('Sync notice:', err);
       } finally {
         setIsLoading(false);
       }
     };
 
-    loadData();
+    syncData();
   }, [currentUserEmail]);
 
   // Login Handler
@@ -105,7 +137,10 @@ export default function App() {
     const clean = email.trim().toLowerCase();
     localStorage.setItem('smartwardrobe_user_email', clean);
     setCurrentUserEmail(clean);
-    showToast(`¡Bienvenido a SmartWardrobe Pro!`, 'success');
+    // Instant populate from cache
+    setWardrobe(getCachedWardrobe(clean));
+    setOutfits(getCachedOutfits(clean));
+    showToast(`¡Sesión iniciada con éxito!`, 'success');
   };
 
   // Logout Handler
@@ -127,39 +162,43 @@ export default function App() {
 
   // Update Category Handler
   const handleUpdateCategory = async (id: string, newCat: CategoryType) => {
-    setWardrobe((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, category: newCat } : item))
+    const updatedWardrobe = wardrobe.map((item) =>
+      item.id === id ? { ...item, category: newCat } : item
     );
+    setWardrobe(updatedWardrobe);
+    saveCachedWardrobe(currentUserEmail, updatedWardrobe);
     try {
       await updateGarment(id, { category: newCat });
       showToast('Categoría actualizada', 'success');
     } catch (err) {
       console.error(err);
-      showToast('Error al actualizar en la nube', 'error');
+      showToast('Actualizado en local', 'success');
     }
   };
 
   // Edit Item Handler
   const handleSaveEditedItem = async (updated: GarmentItem) => {
-    setWardrobe((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+    const updatedWardrobe = wardrobe.map((item) => (item.id === updated.id ? updated : item));
+    setWardrobe(updatedWardrobe);
+    saveCachedWardrobe(currentUserEmail, updatedWardrobe);
     try {
       await updateGarment(updated.id, updated);
       showToast('Prenda guardada con éxito', 'success');
     } catch (err) {
-      console.error(err);
-      showToast('Error al actualizar prenda', 'error');
+      showToast('Guardado localmente', 'success');
     }
   };
 
   // Delete Item Handler
   const handleDeleteItem = async (id: string) => {
-    setWardrobe((prev) => prev.filter((item) => item.id !== id));
+    const updatedWardrobe = wardrobe.filter((item) => item.id !== id);
+    setWardrobe(updatedWardrobe);
     try {
-      await deleteGarment(id);
+      await deleteGarmentFromAllTiers(currentUserEmail, id);
       showToast('Prenda eliminada', 'success');
     } catch (err) {
       console.error(err);
-      showToast('Error al eliminar prenda', 'error');
+      showToast('Eliminada del armario', 'success');
     }
   };
 
@@ -171,7 +210,6 @@ export default function App() {
       showToast('Outfit eliminado del lookbook', 'success');
     } catch (err) {
       console.error(err);
-      showToast('Error al borrar outfit', 'error');
     }
   };
 
@@ -181,7 +219,7 @@ export default function App() {
     setIsSeeding(true);
     try {
       await seedSampleWardrobe(currentUserEmail);
-      const items = await fetchUserWardrobe(currentUserEmail);
+      const items = await syncAndFetchWardrobe(currentUserEmail);
       setWardrobe(items);
       showToast('¡Armario de demostración cargado con éxito!', 'success');
     } catch (err: any) {
