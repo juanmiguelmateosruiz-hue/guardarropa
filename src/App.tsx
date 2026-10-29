@@ -35,20 +35,23 @@ import {
   getCachedOutfits,
   deleteGarmentFromAllTiers,
   persistSavedOutfit,
-  saveCachedWardrobe
+  saveCachedWardrobe,
+  persistUserSession,
+  getStoredUserSession,
+  clearUserSession
 } from './utils/cloudSync';
 
 export default function App() {
   const [currentUserEmail, setCurrentUserEmail] = useState<string>(() => {
-    return localStorage.getItem('smartwardrobe_user_email') || '';
+    return getStoredUserSession();
   });
   const [activeTab, setActiveTab] = useState<'wardrobe' | 'generator' | 'lookbook'>('wardrobe');
   const [wardrobe, setWardrobe] = useState<GarmentItem[]>(() => {
-    const email = localStorage.getItem('smartwardrobe_user_email');
+    const email = getStoredUserSession();
     return email ? getCachedWardrobe(email) : [];
   });
   const [outfits, setOutfits] = useState<SavedOutfit[]>(() => {
-    const email = localStorage.getItem('smartwardrobe_user_email');
+    const email = getStoredUserSession();
     return email ? getCachedOutfits(email) : [];
   });
   const [isLoading, setIsLoading] = useState(false);
@@ -133,11 +136,11 @@ export default function App() {
   }, [currentUserEmail]);
 
   // Login Handler
-  const handleLogin = (email: string) => {
+  const handleLogin = async (email: string) => {
     const clean = email.trim().toLowerCase();
-    localStorage.setItem('smartwardrobe_user_email', clean);
+    persistUserSession(clean);
     setCurrentUserEmail(clean);
-    // Instant populate from cache
+    // Instant populate from cache and IndexedDB
     setWardrobe(getCachedWardrobe(clean));
     setOutfits(getCachedOutfits(clean));
     showToast(`¡Sesión iniciada con éxito!`, 'success');
@@ -145,7 +148,7 @@ export default function App() {
 
   // Logout Handler
   const handleLogout = () => {
-    localStorage.removeItem('smartwardrobe_user_email');
+    clearUserSession();
     setCurrentUserEmail('');
     setWardrobe([]);
     setOutfits([]);

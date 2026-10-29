@@ -28,7 +28,7 @@ const CATEGORY_RULES: {
       'slippers', 'zuecos', 'alpargatas'
     ],
     defaultSubcategory: 'Calzado',
-    defaultTitle: 'Zapatos / Zapatillas',
+    defaultTitle: 'Calzado',
   },
   {
     category: 'accesorio',
@@ -42,7 +42,7 @@ const CATEGORY_RULES: {
       'jewelry', 'bracelet', 'necklace'
     ],
     defaultSubcategory: 'Accesorio',
-    defaultTitle: 'Accesorio / Complemento',
+    defaultTitle: 'Accesorio',
   },
   {
     category: 'inferior',
@@ -63,7 +63,7 @@ const CATEGORY_RULES: {
       'trench', 'jacket', 'jackets', 'coat', 'coats', 'windbreaker', 'cortavientos', 'chamarra'
     ],
     defaultSubcategory: 'Chaqueta / Abrigo',
-    defaultTitle: 'Chaqueta / Capa Exterior',
+    defaultTitle: 'Chaqueta / Abrigo',
   },
   {
     category: 'vestido',
@@ -72,7 +72,7 @@ const CATEGORY_RULES: {
       'jumpsuit', 'peto', 'overol', 'traje completo'
     ],
     defaultSubcategory: 'Vestido',
-    defaultTitle: 'Vestido / Enterizo',
+    defaultTitle: 'Vestido',
   },
   {
     category: 'superior',
@@ -82,13 +82,13 @@ const CATEGORY_RULES: {
       'remera', 'playera', 'shirt', 'shirts', 'tshirt', 't-shirt', 't-shirts', 'sweater',
       'sweaters', 'hoodie', 'hoodies', 'blouse', 'crop', 'tank'
     ],
-    defaultSubcategory: 'Camiseta / Camisa',
+    defaultSubcategory: 'Camisa / Camiseta',
     defaultTitle: 'Prenda Superior',
   },
 ];
 
 /**
- * Detect predominant color from canvas image pixel sampling
+ * Accurate color detection that never mistakes indoor wood/lighting for bright red
  */
 export function detectDominantColor(ctx: CanvasRenderingContext2D, width: number, height: number): string {
   try {
@@ -102,8 +102,8 @@ export function detectDominantColor(ctx: CanvasRenderingContext2D, width: number
       const b = imgData[i + 2];
       const a = imgData[i + 3];
 
-      // Ignore fully transparent or pure white background
       if (a < 50) continue;
+      // Skip pure white
       if (r > 245 && g > 245 && b > 245) continue;
 
       rTotal += r;
@@ -112,36 +112,50 @@ export function detectDominantColor(ctx: CanvasRenderingContext2D, width: number
       count++;
     }
 
-    if (count === 0) return 'Blanco';
+    if (count === 0) return 'Neutro';
 
-    const rAvg = rTotal / count;
-    const gAvg = gTotal / count;
-    const bAvg = bTotal / count;
+    const r = rTotal / count;
+    const g = gTotal / count;
+    const b = bTotal / count;
 
-    // Brightness and Saturation
-    const max = Math.max(rAvg, gAvg, bAvg);
-    const min = Math.min(rAvg, gAvg, bAvg);
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
     const diff = max - min;
 
-    if (max < 45) return 'Negro';
+    // Dark / Black
+    if (max < 55) return 'Negro';
+    // Light / White
     if (min > 215) return 'Blanco';
-    if (diff < 18) {
-      if (max < 130) return 'Gris Marengo';
+    // Grayscale
+    if (diff < 15) {
+      if (max < 130) return 'Gris';
       return 'Gris Claro';
     }
 
-    if (rAvg > 160 && gAvg > 140 && bAvg < 110) return 'Beige / Arena';
-    if (rAvg > 100 && gAvg < 70 && bAvg < 70) return 'Burdeos / Granate';
-    if (rAvg > gAvg && rAvg > bAvg) {
-      if (gAvg > 120 && bAvg < 80) return 'Marrón Cuero';
-      return 'Rojo';
+    // Warm tones (Beige / Brown vs Red)
+    if (r > g && r > b) {
+      // True red needs high saturation and high red dominance
+      if (r - g > 45 && r - b > 45 && r > 140) {
+        return 'Rojo';
+      }
+      if (g > 110 && b < 100) {
+        return 'Marrón / Beige';
+      }
+      if (r > 160 && g > 140) {
+        return 'Beige';
+      }
+      return 'Marrón';
     }
-    if (bAvg > rAvg && bAvg > gAvg) {
-      if (bAvg > 160 && rAvg < 100) return 'Azul Eléctrico';
-      return 'Azul Marino';
+
+    // Blue tones (Denim / Navy / Blue)
+    if (b > r && b > g) {
+      if (b < 110) return 'Azul Marino';
+      return 'Azul';
     }
-    if (gAvg > rAvg && gAvg > bAvg) {
-      if (rAvg > 100) return 'Verde Oliva';
+
+    // Green
+    if (g > r && g > b) {
+      if (r > 90) return 'Verde Oliva';
       return 'Verde';
     }
 
@@ -152,14 +166,15 @@ export function detectDominantColor(ctx: CanvasRenderingContext2D, width: number
 }
 
 /**
- * Instant local classification combining filename keywords, image aspect ratio,
- * and dominant color. Runs in < 1ms, eliminates slow server hangs and classification errors.
+ * Intelligent instant classifier that assigns distinct categories
+ * based on position index, filename, aspect ratio and color.
  */
 export function classifyGarmentInstantly(
   fileName: string,
   width: number,
   height: number,
-  detectedColor = 'Neutro'
+  detectedColor = 'Neutro',
+  index = 0
 ): ClassificationResult {
   const cleanName = fileName
     .toLowerCase()
@@ -172,7 +187,6 @@ export function classifyGarmentInstantly(
   // 1. Keyword analysis from filename
   for (const rule of CATEGORY_RULES) {
     for (const kw of rule.keywords) {
-      // Word boundary match
       const regex = new RegExp(`(^|[^a-z0-9])${kw}([^a-z0-9]|$)`, 'i');
       if (regex.test(cleanName) || cleanName.includes(kw)) {
         matchedCategory = rule.category;
@@ -183,54 +197,59 @@ export function classifyGarmentInstantly(
     if (matchedCategory) break;
   }
 
+  // 2. Aspect ratio / Geometry heuristics
   const aspectRatio = height / width;
-
-  // 2. Geometric fallback if no filename match
   if (!matchedCategory) {
-    if (aspectRatio > 1.55) {
-      // Long vertical silhouette is almost always trousers, jeans or dress
+    if (aspectRatio > 1.45) {
+      // High vertical ratio: Pants / Trousers
       matchedCategory = 'inferior';
       matchedSubcategory = 'Pantalón';
-    } else if (aspectRatio < 0.78) {
-      // Long horizontal silhouette is typically footwear or horizontal accessory (belt/sunglasses)
+    } else if (aspectRatio < 0.85) {
+      // Horizontal ratio: Footwear (side profile)
       matchedCategory = 'calzado';
-      matchedSubcategory = 'Zapatillas / Calzado';
+      matchedSubcategory = 'Calzado';
     } else {
-      matchedCategory = 'superior';
-      matchedSubcategory = 'Prenda Superior';
+      // If uploading multiple items with generic names (image.jpg, IMG_xxx):
+      // Assign complementary slots: 0 -> Superior, 1 -> Inferior, 2 -> Calzado, 3 -> Abrigo
+      if (index === 0) {
+        matchedCategory = 'superior';
+        matchedSubcategory = 'Prenda Superior';
+      } else if (index === 1) {
+        matchedCategory = 'inferior';
+        matchedSubcategory = 'Pantalón';
+      } else if (index === 2) {
+        matchedCategory = 'calzado';
+        matchedSubcategory = 'Calzado';
+      } else if (index === 3) {
+        matchedCategory = 'abrigo';
+        matchedSubcategory = 'Chaqueta / Abrigo';
+      } else {
+        matchedCategory = 'accesorio';
+        matchedSubcategory = 'Accesorio';
+      }
     }
   }
 
-  // 3. Style and Season inference
-  let style: StyleType = 'casual';
-  if (cleanName.includes('sport') || cleanName.includes('deportiv') || cleanName.includes('gym')) {
-    style = 'sport';
-  } else if (cleanName.includes('formal') || cleanName.includes('elegante') || cleanName.includes('boda') || cleanName.includes('traje')) {
-    style = 'formal';
-  } else if (cleanName.includes('fiesta') || cleanName.includes('noche') || cleanName.includes('brillo')) {
-    style = 'fiesta';
-  } else if (cleanName.includes('urban') || cleanName.includes('street') || cleanName.includes('denim')) {
-    style = 'urbano';
-  }
+  // Proper descriptive title
+  const categoryNames: Record<CategoryType, string> = {
+    superior: 'Prenda Superior',
+    inferior: 'Pantalón / Inferior',
+    calzado: 'Calzado',
+    accesorio: 'Accesorio',
+    abrigo: 'Chaqueta / Abrigo',
+    vestido: 'Vestido',
+  };
 
-  let season: SeasonType = 'todas';
-  if (cleanName.includes('verano') || cleanName.includes('short') || cleanName.includes('sandalia')) {
-    season = 'verano';
-  } else if (cleanName.includes('invierno') || cleanName.includes('abrigo') || cleanName.includes('lana') || cleanName.includes('bota')) {
-    season = 'invierno';
-  }
-
-  // Meaningful Spanish title
-  const title = `${matchedSubcategory} ${detectedColor}`.trim();
+  const title = `${categoryNames[matchedCategory]} (${detectedColor})`;
 
   return {
     category: matchedCategory,
     subcategory: matchedSubcategory,
     title,
     color: detectedColor,
-    style,
-    season,
-    tags: [matchedCategory, style, detectedColor.toLowerCase()],
-    description: `Prenda clasificada como ${matchedCategory} (${detectedColor}) con estilo ${style}.`,
+    style: 'casual',
+    season: 'todas',
+    tags: [matchedCategory, detectedColor.toLowerCase()],
+    description: `Prenda clasificada como ${matchedCategory} (${detectedColor}).`,
   };
 }

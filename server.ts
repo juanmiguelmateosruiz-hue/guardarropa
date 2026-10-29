@@ -138,6 +138,18 @@ async function startServer() {
   const app = express();
   const PORT = process.env.PORT || 3000;
 
+  // CORS middleware for seamless cross-origin and mobile/desktop sync
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, apikey');
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(200);
+      return;
+    }
+    next();
+  });
+
   // Body parser with 50MB limit to handle batch uploads effortlessly
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));

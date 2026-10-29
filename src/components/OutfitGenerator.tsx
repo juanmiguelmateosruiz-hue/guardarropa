@@ -359,19 +359,21 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
             <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-[10px]">
               <button
                 onClick={() => setViewMode('fittedModel')}
-                className={`px-2.5 py-1 rounded-lg font-bold transition ${
-                  viewMode === 'fittedModel' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  viewMode === 'fittedModel' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                Modelo Vestido
+                <Sparkles className="w-3 h-3" />
+                <span>Modelo con Tu Ropa</span>
               </button>
               <button
                 onClick={() => setViewMode('editorial')}
-                className={`px-2.5 py-1 rounded-lg font-bold transition ${
-                  viewMode === 'editorial' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  viewMode === 'editorial' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                Editorial
+                <Eye className="w-3 h-3" />
+                <span>Lookbook Editorial</span>
               </button>
             </div>
           </div>
@@ -403,16 +405,16 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
 
             {/* Rendering Spinner */}
             {isRenderingModel && (
-              <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-xs flex flex-col items-center justify-center text-white space-y-3 z-30">
+              <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-xs flex flex-col items-center justify-center text-white space-y-3 z-30">
                 <div className="w-12 h-12 rounded-full border-3 border-indigo-500 border-t-transparent animate-spin flex items-center justify-center">
                   <Sparkles className="w-5 h-5 text-indigo-400" />
                 </div>
-                <p className="text-xs font-bold text-indigo-300">Ajustando tus prendas al modelo...</p>
+                <p className="text-xs font-bold text-indigo-300">Ajustando tus prendas al modelo de alta costura...</p>
               </div>
             )}
 
             {/* Bottom Floating Info Pill */}
-            <div className="absolute bottom-3 inset-x-3 bg-slate-950/90 backdrop-blur-md p-3 rounded-2xl border border-slate-800 shadow-xl space-y-1.5">
+            <div className="absolute bottom-3 inset-x-3 bg-slate-950/90 backdrop-blur-md p-3 rounded-2xl border border-slate-800 shadow-xl space-y-2">
               <div className="flex items-center justify-between text-[11px]">
                 <span className="font-bold text-white flex items-center gap-1.5">
                   <Eye className="w-3.5 h-3.5 text-indigo-400" />
@@ -427,26 +429,26 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
                 </button>
               </div>
 
-              {/* Tag Pills */}
+              {/* Accurately Labeled Tag Pills */}
               <div className="flex flex-wrap gap-1.5">
                 {pieces.superior && (
-                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                    👕 {pieces.superior.title}
+                  <span className="text-[10px] font-medium px-2.5 py-1 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                    👔 Superior: <strong className="text-white">{pieces.superior.title}</strong>
                   </span>
                 )}
                 {pieces.inferior && (
-                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                    👖 {pieces.inferior.title}
+                  <span className="text-[10px] font-medium px-2.5 py-1 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                    👖 Pantalón: <strong className="text-white">{pieces.inferior.title}</strong>
                   </span>
                 )}
                 {pieces.calzado && (
-                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                    👟 {pieces.calzado.title}
+                  <span className="text-[10px] font-medium px-2.5 py-1 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                    👟 Calzado: <strong className="text-white">{pieces.calzado.title}</strong>
                   </span>
                 )}
                 {pieces.abrigo && (
-                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                    🧥 {pieces.abrigo.title}
+                  <span className="text-[10px] font-medium px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                    🧥 Chaqueta: <strong className="text-white">{pieces.abrigo.title}</strong>
                   </span>
                 )}
               </div>
