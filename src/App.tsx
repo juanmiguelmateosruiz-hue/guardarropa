@@ -18,6 +18,7 @@ import { BatchUploadModal } from './components/BatchUploadModal';
 import { CameraCaptureModal } from './components/CameraCaptureModal';
 import { GarmentDetailModal } from './components/GarmentDetailModal';
 import { YoniMikelModal } from './components/YoniMikelModal';
+import { SyncDevicesModal } from './components/SyncDevicesModal';
 import { GarmentItem, SavedOutfit, CategoryType } from './types/wardrobe';
 import {
   fetchUserWardrobe,
@@ -63,6 +64,7 @@ export default function App() {
   const [editingItem, setEditingItem] = useState<GarmentItem | null>(null);
   const [isYoniModalOpen, setIsYoniModalOpen] = useState(false);
   const [isYoniUnlocked, setIsYoniUnlocked] = useState(false);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
 
   // PWA beforeinstallprompt event
   const [installPrompt, setInstallPrompt] = useState<any>(null);
@@ -270,6 +272,7 @@ export default function App() {
         isYoniUnlocked={isYoniUnlocked}
         installPrompt={installPrompt}
         onInstallApp={handleInstallApp}
+        onOpenSyncModal={() => setIsSyncModalOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -324,6 +327,7 @@ export default function App() {
             onDeleteItem={handleDeleteItem}
             onSeedDemo={handleSeedDemo}
             isSeeding={isSeeding}
+            onOpenSyncModal={() => setIsSyncModalOpen(true)}
           />
         )}
 
@@ -412,6 +416,21 @@ export default function App() {
           onClose={() => setIsYoniModalOpen(false)}
           isUnlocked={isYoniUnlocked}
           onUnlock={handleUnlockYoni}
+        />
+      )}
+
+      {/* Sync Devices Modal (Mobile <-> PC PIN Exchange & Vault Sync) */}
+      {isSyncModalOpen && (
+        <SyncDevicesModal
+          userEmail={currentUserEmail}
+          wardrobe={wardrobe}
+          outfits={outfits}
+          onClose={() => setIsSyncModalOpen(false)}
+          onSyncCompleted={(syncedItems, syncedOutfits) => {
+            setWardrobe(syncedItems);
+            setOutfits(syncedOutfits);
+            showToast(`¡Bóveda sincronizada! ${syncedItems.length} prendas listas.`, 'success');
+          }}
         />
       )}
     </div>

@@ -24,6 +24,7 @@ interface WardrobeSectionProps {
   onDeleteItem: (id: string) => void;
   onSeedDemo: () => void;
   isSeeding: boolean;
+  onOpenSyncModal: () => void;
 }
 
 const CATEGORIES: { id: CategoryType | 'todos'; label: string; countKey?: CategoryType }[] = [
@@ -44,6 +45,7 @@ export const WardrobeSection: React.FC<WardrobeSectionProps> = ({
   onDeleteItem,
   onSeedDemo,
   isSeeding,
+  onOpenSyncModal,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<CategoryType | 'todos'>('todos');
   const [searchQuery, setSearchQuery] = useState('');
@@ -155,6 +157,24 @@ export const WardrobeSection: React.FC<WardrobeSectionProps> = ({
             )}
           </div>
         </div>
+      </div>
+
+      {/* Cloud Persistence & Device Sync Status Bar */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
+        <div className="flex items-center gap-2.5 text-xs">
+          <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0"></span>
+          <span className="text-slate-300">
+            Bóveda en la Nube Activa · <strong className="text-white">{wardrobe.length} prendas</strong> guardadas
+          </span>
+        </div>
+
+        <button
+          onClick={onOpenSyncModal}
+          className="px-3.5 py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/35 border border-indigo-500/30 text-indigo-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+        >
+          <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+          <span>Sincronizar con PC / Móvil (PIN)</span>
+        </button>
       </div>
 
       {/* Filter and Search Bar */}

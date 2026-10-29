@@ -122,20 +122,21 @@ export const BatchUploadModal: React.FC<BatchUploadModalProps> = ({
       const copy = [...prev];
       if (copy[index] && copy[index].detectedData) {
         const currentData = copy[index].detectedData!;
+        const colorSuffix = currentData.color ? ` (${currentData.color})` : '';
         const categoryTitles: Record<CategoryType, string> = {
-          superior: 'Prenda Superior',
-          inferior: 'Pantalón',
-          calzado: 'Calzado',
-          abrigo: 'Chaqueta / Abrigo',
-          accesorio: 'Accesorio',
-          vestido: 'Vestido',
+          superior: `Prenda Superior${colorSuffix}`,
+          inferior: `Pantalón${colorSuffix}`,
+          calzado: `Calzado${colorSuffix}`,
+          abrigo: `Chaqueta / Abrigo${colorSuffix}`,
+          accesorio: `Accesorio${colorSuffix}`,
+          vestido: `Vestido${colorSuffix}`,
         };
         copy[index] = {
           ...copy[index],
           detectedData: {
             ...currentData,
             category: newCategory,
-            title: `${categoryTitles[newCategory]}`,
+            title: categoryTitles[newCategory],
             subcategory: categoryTitles[newCategory],
           },
         };
@@ -162,14 +163,14 @@ export const BatchUploadModal: React.FC<BatchUploadModalProps> = ({
         notes: item.detectedData?.description || '',
       }));
 
-      // Multi-tier persistence to Supabase and Local Vault
+      // Multi-tier persistence to Cloud Database & IndexedDB
       const savedItems = await persistNewGarments(userEmail, payload);
 
       setUploadSuccess(true);
       setTimeout(() => {
         onBatchCompleted(savedItems);
         onClose();
-      }, 350);
+      }, 500);
     } catch (err: any) {
       console.error('Batch upload error:', err);
       setErrorMessage(err.message || 'Error al guardar en la nube.');

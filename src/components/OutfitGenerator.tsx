@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Sparkles,
   Shuffle,
@@ -11,16 +11,16 @@ import {
   User,
   Heart,
   Eye,
-  Sliders,
-  Copy,
-  Check,
   Download,
-  Layers,
-  Shirt
+  Shirt,
+  AlertCircle,
+  HelpCircle,
+  Check,
+  Layers
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { GarmentItem, OutfitPieces, OccasionType, SavedOutfit } from '../types/wardrobe';
-import { getStylistAdvice, saveUserOutfit } from '../utils/api';
+import { getStylistAdvice, saveUserOutfit, requestAIDressModel } from '../utils/api';
 import { FASHION_MODEL_LOOKS } from '../data/fashionModels';
 import { renderModelDressedWithGarments } from '../utils/aiModelFitter';
 
@@ -44,6 +44,48 @@ const OCCASIONS: { id: OccasionType; label: string; icon: string; desc: string }
   { id: 'verano', label: 'Verano / Fresco', icon: '☀️', desc: 'Tejidos ligeros y colores vivos' },
 ];
 
+// High-fashion studio base essentials if user hasn't uploaded footwear or accessories yet
+const STUDIO_ESSENTIAL_CALZADO: GarmentItem = {
+  id: 'essential_calzado',
+  email: '',
+  category: 'calzado',
+  subcategory: 'Calzado Studio',
+  title: 'Zapatillas Cuero Blanco Minimal',
+  color: 'Blanco',
+  style: 'casual',
+  season: 'todas',
+  imageUrl: 'https://images.unsplash.com/photo-1549298916-b41d501d3772?auto=format&fit=crop&w=600&q=80',
+  createdAt: 0,
+};
+
+const STUDIO_ESSENTIAL_ACCESORIO: GarmentItem = {
+  id: 'essential_accesorio',
+  email: '',
+  category: 'accesorio',
+  subcategory: 'Accesorio Studio',
+  title: 'Reloj Cronógrafo Cuero',
+  color: 'Negro / Plata',
+  style: 'elegante',
+  season: 'todas',
+  imageUrl: 'https://images.unsplash.com/photo-1524805444758-089113d48a6d?auto=format&fit=crop&w=600&q=80',
+  createdAt: 0,
+};
+
+function cleanItemTitle(item?: GarmentItem, fallbackLabel = 'Prenda'): string {
+  if (!item) return fallbackLabel;
+  let title = item.title || fallbackLabel;
+
+  // Clean corrupted "Prenda Superior" tags on pants or footwear
+  if (item.category === 'inferior' && title.toLowerCase().includes('prenda superior')) {
+    title = title.replace(/prenda superior/gi, 'Pantalón');
+  } else if (item.category === 'calzado' && title.toLowerCase().includes('prenda superior')) {
+    title = title.replace(/prenda superior/gi, 'Calzado');
+  } else if (item.category === 'accesorio' && title.toLowerCase().includes('prenda superior')) {
+    title = title.replace(/prenda superior/gi, 'Accesorio');
+  }
+  return title;
+}
+
 export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
   wardrobe,
   userEmail,
@@ -57,10 +99,12 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
   const [pieces, setPieces] = useState<OutfitPieces>({});
   const [lockedSlots, setLockedSlots] = useState<{ [key in keyof OutfitPieces]?: boolean }>({});
   const [isGenerating, setIsGenerating] = useState(false);
-  const [viewMode, setViewMode] = useState<'fittedModel' | 'editorial'>('fittedModel');
+  const [viewMode, setViewMode] = useState<'fittedModel' | 'aiModel' | 'editorial'>('fittedModel');
   const [fittedModelImage, setFittedModelImage] = useState<string>('');
+  const [aiGeneratedModelImage, setAiGeneratedModelImage] = useState<string>('');
   const [isRenderingModel, setIsRenderingModel] = useState<boolean>(false);
-  const [copiedPrompt, setCopiedPrompt] = useState(false);
+  const [isCallingGeminiImage, setIsCallingGeminiImage] = useState<boolean>(false);
+
   const [advice, setAdvice] = useState<{
     matchScore: number;
     verdict: string;
@@ -79,11 +123,17 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
 
   const canGenerate = superiors.length > 0 && inferiors.length > 0;
 
-  // Render the fictitious model dressed with the user's actual clothes
-  const updateFittedModel = async (currentPieces: OutfitPieces, gender: 'hombre' | 'mujer', occasion: OccasionType) => {
+  // Render the fictitious full-body model dressed with the user's actual clothes
+  const updateFittedModel = async (
+    currentPieces: OutfitPieces,
+    gender: 'hombre' | 'mujer',
+    occasion: OccasionType
+  ) => {
     if (!currentPieces.superior || !currentPieces.inferior) return;
     setIsRenderingModel(true);
+
     try {
+      // 1. Immediately compose the full-body studio mannequin with the user's exact clothes
       const renderedUrl = await renderModelDressedWithGarments({
         gender,
         occasion,
@@ -93,17 +143,31 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
         setFittedModelImage(renderedUrl);
       }
     } catch (err) {
-      console.warn('Error rendering fitted model:', err);
+      console.warn('Error rendering fitted mannequin:', err);
     } finally {
       setIsRenderingModel(false);
     }
+
+    // 2. Also query Gemini in background for photorealistic synthesis
+    setIsCallingGeminiImage(true);
+    requestAIDressModel(gender, occasion, currentPieces)
+      .then((res) => {
+        if (res.success && res.imageUrl) {
+          setAiGeneratedModelImage(res.imageUrl);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        setIsCallingGeminiImage(false);
+      });
   };
 
-  // Generate outfit
+  // Generate outfit enforcing all 4 pieces: Superior, Pantalón, Calzado, and Complemento
   const generateOutfit = (occasion: OccasionType = selectedOccasion) => {
     if (!canGenerate) return;
     setIsGenerating(true);
     setSaveSuccessMsg('');
+    setAiGeneratedModelImage('');
 
     const filterByOccasion = (items: GarmentItem[]) => {
       const matched = items.filter((i) => {
@@ -120,21 +184,32 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
       return items[Math.floor(Math.random() * items.length)];
     };
 
+    // User's items prioritized; studio essential fallback if not yet uploaded
+    const chosenSuperior = lockedSlots.superior ? pieces.superior : pickRandom(filterByOccasion(superiors));
+    const chosenInferior = lockedSlots.inferior ? pieces.inferior : pickRandom(filterByOccasion(inferiors));
+    const chosenCalzado = lockedSlots.calzado
+      ? pieces.calzado
+      : pickRandom(filterByOccasion(calzados)) || STUDIO_ESSENTIAL_CALZADO;
+    const chosenAccesorio = lockedSlots.accesorio
+      ? pieces.accesorio
+      : pickRandom(accesorios) || STUDIO_ESSENTIAL_ACCESORIO;
+    const chosenAbrigo = lockedSlots.abrigo
+      ? pieces.abrigo
+      : occasion === 'invierno' || occasion === 'formal'
+      ? pickRandom(abrigos)
+      : undefined;
+
     const newPieces: OutfitPieces = {
-      superior: lockedSlots.superior ? pieces.superior : pickRandom(filterByOccasion(superiors)),
-      inferior: lockedSlots.inferior ? pieces.inferior : pickRandom(filterByOccasion(inferiors)),
-      calzado: lockedSlots.calzado ? pieces.calzado : pickRandom(filterByOccasion(calzados)),
-      accesorio: lockedSlots.accesorio ? pieces.accesorio : pickRandom(accesorios),
-      abrigo: lockedSlots.abrigo
-        ? pieces.abrigo
-        : occasion === 'invierno' || occasion === 'formal' || Math.random() > 0.4
-        ? pickRandom(abrigos)
-        : undefined,
+      superior: chosenSuperior,
+      inferior: chosenInferior,
+      calzado: chosenCalzado,
+      accesorio: chosenAccesorio,
+      abrigo: chosenAbrigo,
     };
 
     setPieces(newPieces);
 
-    // Dress the fictitious model with user's clothes
+    // Dress the full-body model with user's exact clothes
     updateFittedModel(newPieces, selectedGender, occasion);
 
     // Call Stylist Advice
@@ -144,10 +219,10 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
       })
       .catch(() => {
         setAdvice({
-          matchScore: 95,
-          verdict: 'Estilo Sofisticado',
-          advice: 'Prendas armónicas coordinadas directamente sobre el modelo virtual.',
-          creatorTip: 'Tip de Yoni Mikel: La actitud y un buen calzado completan el look.',
+          matchScore: 96,
+          verdict: 'Estilo Coordinado',
+          advice: 'Conjunto equilibrado en proporciones, cortes y contrastes.',
+          creatorTip: 'Tip de Yoni Mikel: La actitud y un calzado impecable definen la elegancia.',
         });
       })
       .finally(() => {
@@ -160,8 +235,8 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
     let pool: GarmentItem[] = [];
     if (slot === 'superior') pool = superiors;
     else if (slot === 'inferior') pool = inferiors;
-    else if (slot === 'calzado') pool = calzados;
-    else if (slot === 'accesorio') pool = accesorios;
+    else if (slot === 'calzado') pool = calzados.length > 0 ? calzados : [STUDIO_ESSENTIAL_CALZADO];
+    else if (slot === 'accesorio') pool = accesorios.length > 0 ? accesorios : [STUDIO_ESSENTIAL_ACCESORIO];
     else if (slot === 'abrigo') pool = abrigos;
 
     if (pool.length === 0) return;
@@ -181,7 +256,6 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
     setLockedSlots((prev) => ({ ...prev, [slot]: !prev[slot] }));
   };
 
-  // Switch gender and re-fit model
   const handleGenderSwitch = (gender: 'hombre' | 'mujer') => {
     setSelectedGender(gender);
     updateFittedModel(pieces, gender, selectedOccasion);
@@ -234,12 +308,13 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
     }
   };
 
-  // Download fitted model look
+  // Download look
   const downloadModelLook = () => {
-    if (!fittedModelImage) return;
+    const src = viewMode === 'aiModel' && aiGeneratedModelImage ? aiGeneratedModelImage : fittedModelImage;
+    if (!src) return;
     const link = document.createElement('a');
-    link.download = `smartwardrobe_modelo_${selectedOccasion}_${Date.now()}.jpg`;
-    link.href = fittedModelImage;
+    link.download = `smartwardrobe_modelo_cuerpo_completo_${selectedOccasion}_${Date.now()}.jpg`;
+    link.href = src;
     link.click();
   };
 
@@ -247,12 +322,12 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
     return (
       <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 sm:p-12 text-center max-w-2xl mx-auto space-y-5 shadow-xl">
         <div className="w-16 h-16 rounded-3xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mx-auto">
-          <Sparkles className="w-8 h-8 animate-pulse" />
+          <Shirt className="w-8 h-8 animate-pulse" />
         </div>
         <div>
           <h2 className="text-xl font-bold text-white">Prepara tu Guardarropa Virtual</h2>
-          <p className="text-xs text-slate-400 mt-2 max-w-md mx-auto">
-            Para que la IA de <strong>SmartWardrobe Pro</strong> pueda diseñar un modelo y vestirlo con tus prendas, necesitas subir al menos una prenda <span className="text-indigo-400 font-semibold">superior</span> y una <span className="text-indigo-400 font-semibold">inferior</span>.
+          <p className="text-xs text-slate-400 mt-2 max-w-md mx-auto leading-relaxed">
+            Para que la IA de <strong>SmartWardrobe Pro</strong> pueda diseñar el modelo de cuerpo completo y vestirlo con tu ropa, sube al menos una prenda <span className="text-indigo-400 font-semibold">superior</span> y un <span className="text-indigo-400 font-semibold">pantalón</span> a tu armario.
           </p>
         </div>
         <div className="flex items-center justify-center gap-3 pt-2">
@@ -275,10 +350,10 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
           <div>
             <h2 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-indigo-400" />
-              <span>Probador Virtual: Modelo Vestido con Tu Ropa</span>
+              <span>Probador Virtual: Modelo Ficticio de Cuerpo Completo</span>
             </h2>
             <p className="text-xs text-slate-400">
-              La IA toma las fotos exactas de tu armario, diseña un modelo ficticio y lo viste con tu ropa.
+              Viste al modelo de cuerpo completo con las 4 piezas exactas de tu armario: superior, pantalón, calzado y complemento.
             </p>
           </div>
 
@@ -313,7 +388,7 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
               className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-xs flex items-center gap-2 shadow-md transition active:scale-95 cursor-pointer"
             >
               <Shuffle className={`w-4 h-4 ${isGenerating ? 'animate-spin' : ''}`} />
-              <span>Nuevo Mix</span>
+              <span>Nuevo Mix (4 Piezas)</span>
             </button>
           </div>
         </div>
@@ -343,48 +418,60 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
         </div>
       </div>
 
-      {/* Main Stylist Stage: Fictitious Model Dressed with User's Clothes + Breakdown */}
+      {/* Main Stylist Stage: Full-Body Model Dressed with User's Clothes + Breakdown */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left: The Virtual Model Dressed With User's Actual Clothes (6 cols) */}
+        {/* Left: The Virtual Full-Body Model (6 cols) */}
         <div className="lg:col-span-6 bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl flex flex-col justify-between space-y-4 relative overflow-hidden">
           {/* Top Bar over Model */}
           <div className="flex items-center justify-between z-10">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] uppercase font-bold tracking-widest px-2.5 py-1 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                Modelo Virtual Vestido con Tu Ropa
-              </span>
-            </div>
+            <span className="text-[10px] uppercase font-bold tracking-widest px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              Cuerpo Completo · 4 Piezas
+            </span>
 
             {/* View Mode Toggle */}
             <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-[10px]">
               <button
                 onClick={() => setViewMode('fittedModel')}
-                className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                className={`px-2.5 py-1.5 rounded-lg font-bold transition flex items-center gap-1 cursor-pointer ${
                   viewMode === 'fittedModel' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
                 }`}
+                title="Maniquí virtual de cuerpo completo vestido con tu ropa exacta"
               >
                 <Sparkles className="w-3 h-3" />
-                <span>Modelo con Tu Ropa</span>
+                <span>Tu Ropa Real</span>
               </button>
+
+              {aiGeneratedModelImage && (
+                <button
+                  onClick={() => setViewMode('aiModel')}
+                  className={`px-2.5 py-1.5 rounded-lg font-bold transition flex items-center gap-1 cursor-pointer ${
+                    viewMode === 'aiModel' ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="Fotorrealista generado por Gemini"
+                >
+                  <span>🤖 IA Gemini</span>
+                </button>
+              )}
+
               <button
                 onClick={() => setViewMode('editorial')}
-                className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                className={`px-2.5 py-1.5 rounded-lg font-bold transition flex items-center gap-1 cursor-pointer ${
                   viewMode === 'editorial' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
                 }`}
               >
                 <Eye className="w-3 h-3" />
-                <span>Lookbook Editorial</span>
+                <span>Editorial</span>
               </button>
             </div>
           </div>
 
-          {/* Model Display Canvas / Photo */}
-          <div className="relative w-full h-[530px] rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-2xl group flex items-center justify-center">
+          {/* Model Display Stage (Full Body Portrait Aspect Ratio) */}
+          <div className="relative w-full h-[620px] rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-2xl group flex items-center justify-center">
             {viewMode === 'fittedModel' ? (
               fittedModelImage ? (
                 <img
                   src={fittedModelImage}
-                  alt="Modelo vistiendo tu ropa"
+                  alt="Modelo de cuerpo completo con tu ropa"
                   className={`w-full h-full object-contain transition-all duration-300 ${
                     isRenderingModel ? 'opacity-50 blur-xs' : 'opacity-100'
                   }`}
@@ -395,6 +482,12 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
                   <p className="text-xs font-semibold text-slate-400">Vistiendo al modelo con tu ropa...</p>
                 </div>
               )
+            ) : viewMode === 'aiModel' && aiGeneratedModelImage ? (
+              <img
+                src={aiGeneratedModelImage}
+                alt="Modelo IA de cuerpo completo"
+                className="w-full h-full object-cover object-center"
+              />
             ) : (
               <img
                 src={editorialLook.imageUrl}
@@ -409,16 +502,18 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
                 <div className="w-12 h-12 rounded-full border-3 border-indigo-500 border-t-transparent animate-spin flex items-center justify-center">
                   <Sparkles className="w-5 h-5 text-indigo-400" />
                 </div>
-                <p className="text-xs font-bold text-indigo-300">Ajustando tus prendas al modelo de alta costura...</p>
+                <p className="text-xs font-bold text-indigo-300">
+                  Ajustando tus 4 prendas al modelo de cuerpo completo...
+                </p>
               </div>
             )}
 
-            {/* Bottom Floating Info Pill */}
+            {/* Bottom Floating Info Card with Accurately Labeled Badges */}
             <div className="absolute bottom-3 inset-x-3 bg-slate-950/90 backdrop-blur-md p-3 rounded-2xl border border-slate-800 shadow-xl space-y-2">
               <div className="flex items-center justify-between text-[11px]">
                 <span className="font-bold text-white flex items-center gap-1.5">
                   <Eye className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Prendas de tu armario aplicadas al modelo</span>
+                  <span>Las 4 prendas que viste el modelo:</span>
                 </span>
                 <button
                   onClick={downloadModelLook}
@@ -429,26 +524,31 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
                 </button>
               </div>
 
-              {/* Accurately Labeled Tag Pills */}
+              {/* Accurately Labeled Tag Pills (No repeated titles!) */}
               <div className="flex flex-wrap gap-1.5">
                 {pieces.superior && (
                   <span className="text-[10px] font-medium px-2.5 py-1 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                    👔 Superior: <strong className="text-white">{pieces.superior.title}</strong>
+                    👔 Superior: <strong className="text-white">{cleanItemTitle(pieces.superior, 'Prenda Superior')}</strong>
                   </span>
                 )}
                 {pieces.inferior && (
                   <span className="text-[10px] font-medium px-2.5 py-1 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                    👖 Pantalón: <strong className="text-white">{pieces.inferior.title}</strong>
+                    👖 Pantalón: <strong className="text-white">{cleanItemTitle(pieces.inferior, 'Pantalón')}</strong>
                   </span>
                 )}
                 {pieces.calzado && (
                   <span className="text-[10px] font-medium px-2.5 py-1 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                    👟 Calzado: <strong className="text-white">{pieces.calzado.title}</strong>
+                    👟 Calzado: <strong className="text-white">{cleanItemTitle(pieces.calzado, 'Calzado')}</strong>
+                  </span>
+                )}
+                {pieces.accesorio && (
+                  <span className="text-[10px] font-medium px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                    ⌚ Complemento: <strong className="text-white">{cleanItemTitle(pieces.accesorio, 'Accesorio')}</strong>
                   </span>
                 )}
                 {pieces.abrigo && (
-                  <span className="text-[10px] font-medium px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                    🧥 Chaqueta: <strong className="text-white">{pieces.abrigo.title}</strong>
+                  <span className="text-[10px] font-medium px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    🧥 Chaqueta: <strong className="text-white">{cleanItemTitle(pieces.abrigo, 'Chaqueta')}</strong>
                   </span>
                 )}
               </div>
@@ -517,7 +617,7 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
               </span>
               <p className="text-xs text-slate-300 leading-relaxed">
                 {advice?.advice ||
-                  'Las prendas de tu armario se integran con naturalidad sobre la silueta del modelo, respetando caídas y contrastes.'}
+                  'Las 4 piezas de tu armario se integran con naturalidad sobre la silueta del modelo, respetando caídas y contrastes.'}
               </p>
             </div>
 
@@ -539,10 +639,10 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                Tus Prendas en el Modelo
+                Las 4 Piezas del Outfit
               </h3>
               <span className="text-[10px] text-indigo-400">
-                Usa el candado 🔒 para fijar piezas
+                Usa el candado 🔒 para fijar prendas
               </span>
             </div>
 
@@ -550,7 +650,7 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
               {/* Superior Slot */}
               <SlotCard
                 slotKey="superior"
-                label="Prenda Superior"
+                label="1. Prenda Superior"
                 item={pieces.superior}
                 isLocked={!!lockedSlots.superior}
                 onToggleLock={() => toggleLock('superior')}
@@ -560,7 +660,7 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
               {/* Inferior Slot */}
               <SlotCard
                 slotKey="inferior"
-                label="Prenda Inferior"
+                label="2. Pantalón / Inferior"
                 item={pieces.inferior}
                 isLocked={!!lockedSlots.inferior}
                 onToggleLock={() => toggleLock('inferior')}
@@ -570,7 +670,7 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
               {/* Calzado Slot */}
               <SlotCard
                 slotKey="calzado"
-                label="Calzado"
+                label="3. Calzado"
                 item={pieces.calzado}
                 isLocked={!!lockedSlots.calzado}
                 onToggleLock={() => toggleLock('calzado')}
@@ -578,16 +678,14 @@ export const OutfitGenerator: React.FC<OutfitGeneratorProps> = ({
               />
 
               {/* Accesorio Slot */}
-              {pieces.accesorio && (
-                <SlotCard
-                  slotKey="accesorio"
-                  label="Accesorio / Detalle"
-                  item={pieces.accesorio}
-                  isLocked={!!lockedSlots.accesorio}
-                  onToggleLock={() => toggleLock('accesorio')}
-                  onReroll={() => rerollSlot('accesorio')}
-                />
-              )}
+              <SlotCard
+                slotKey="accesorio"
+                label="4. Complemento / Accesorio"
+                item={pieces.accesorio}
+                isLocked={!!lockedSlots.accesorio}
+                onToggleLock={() => toggleLock('accesorio')}
+                onReroll={() => rerollSlot('accesorio')}
+              />
 
               {/* Abrigo Slot if present */}
               {pieces.abrigo && (
@@ -625,6 +723,7 @@ const SlotCard: React.FC<SlotCardProps> = ({
   onReroll,
 }) => {
   if (!item) return null;
+  const cleanTitle = cleanItemTitle(item, label);
 
   return (
     <div
@@ -635,14 +734,14 @@ const SlotCard: React.FC<SlotCardProps> = ({
       }`}
     >
       <div className="w-14 h-14 rounded-xl overflow-hidden bg-slate-950 flex-shrink-0 border border-slate-800 shadow-sm">
-        <img src={item.imageUrl} alt={item.title} className="w-full h-full object-cover" />
+        <img src={item.imageUrl} alt={cleanTitle} className="w-full h-full object-cover" />
       </div>
 
       <div className="flex-1 min-w-0">
         <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">
           {label}
         </span>
-        <h4 className="text-xs font-bold text-white truncate">{item.title}</h4>
+        <h4 className="text-xs font-bold text-white truncate">{cleanTitle}</h4>
         <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mt-0.5">
           <span>{item.color}</span>
           <span>•</span>

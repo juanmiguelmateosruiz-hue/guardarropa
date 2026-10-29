@@ -233,7 +233,7 @@ export function classifyGarmentInstantly(
   // Proper descriptive title
   const categoryNames: Record<CategoryType, string> = {
     superior: 'Prenda Superior',
-    inferior: 'Pantalón / Inferior',
+    inferior: 'Pantalón',
     calzado: 'Calzado',
     accesorio: 'Accesorio',
     abrigo: 'Chaqueta / Abrigo',

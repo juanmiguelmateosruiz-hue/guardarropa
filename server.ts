@@ -226,7 +226,7 @@ async function startServer() {
     }
   });
 
-  // BATCH Upload endpoint - Solves the batch freeze and silent failure completely!
+  // BATCH Upload endpoint - Solves the batch freeze and preserves client IDs
   app.post('/api/prendas/batch', async (req: Request, res: Response) => {
     try {
       const { email, items } = req.body;
@@ -236,6 +236,7 @@ async function startServer() {
       }
 
       const wardrobe = readWardrobe();
+      const userEmail = email.toLowerCase().trim();
       const results: { success: boolean; item?: GarmentItem; error?: string; originalIndex: number }[] = [];
 
       for (let i = 0; i < items.length; i++) {
@@ -246,12 +247,12 @@ async function startServer() {
             continue;
           }
 
-          const id = 'prenda_' + Date.now() + '_' + i + '_' + Math.random().toString(36).substring(2, 6);
+          const id = raw.id || 'prenda_' + Date.now() + '_' + i + '_' + Math.random().toString(36).substring(2, 6);
           const diskImageUrl = saveImageToDisk(raw.imageUrl, id);
 
           const newItem: GarmentItem = {
             id,
-            email: email.toLowerCase().trim(),
+            email: userEmail,
             category: raw.category || 'superior',
             subcategory: raw.subcategory || '',
             title: raw.title || `Prenda ${wardrobe.length + i + 1}`,
@@ -262,10 +263,17 @@ async function startServer() {
             thumbnailUrl: diskImageUrl,
             tags: Array.isArray(raw.tags) ? raw.tags : [],
             notes: raw.notes || '',
-            createdAt: Date.now() + i,
+            createdAt: raw.createdAt || Date.now() + i,
           };
 
-          wardrobe.push(newItem);
+          // Check if already in wardrobe
+          const existingIdx = wardrobe.findIndex((item) => item.id === id);
+          if (existingIdx >= 0) {
+            wardrobe[existingIdx] = newItem;
+          } else {
+            wardrobe.push(newItem);
+          }
+
           results.push({ success: true, item: newItem, originalIndex: i });
         } catch (itemErr: any) {
           console.error(`Error processing batch item #${i}:`, itemErr);
@@ -282,6 +290,151 @@ async function startServer() {
     } catch (err: any) {
       console.error('POST /api/prendas/batch error:', err);
       res.status(500).json({ error: 'Batch upload failed', details: err.message });
+    }
+  });
+
+  // Bi-directional Full Vault Synchronization Endpoint (Solves Mobile <-> PC sync instantly)
+  app.post('/api/sync/vault', (req: Request, res: Response) => {
+    try {
+      const { email, items, outfits } = req.body;
+      if (!email) {
+        res.status(400).json({ error: 'Email is required for sync' });
+        return;
+      }
+
+      const userEmail = email.toLowerCase().trim();
+      let wardrobe = readWardrobe();
+      let savedOutfits = readOutfits();
+
+      // Merge incoming items from client
+      if (Array.isArray(items) && items.length > 0) {
+        for (const raw of items) {
+          if (!raw.id) continue;
+          const diskImageUrl = raw.imageUrl ? saveImageToDisk(raw.imageUrl, raw.id) : '';
+          const existingIdx = wardrobe.findIndex((i) => i.id === raw.id);
+          const normalizedItem: GarmentItem = {
+            id: raw.id,
+            email: userEmail,
+            category: raw.category || 'superior',
+            subcategory: raw.subcategory || '',
+            title: raw.title || 'Prenda',
+            color: raw.color || 'Neutro',
+            style: raw.style || 'casual',
+            season: raw.season || 'todas',
+            imageUrl: diskImageUrl || raw.imageUrl,
+            thumbnailUrl: diskImageUrl || raw.thumbnailUrl || raw.imageUrl,
+            tags: Array.isArray(raw.tags) ? raw.tags : [],
+            notes: raw.notes || '',
+            createdAt: raw.createdAt || Date.now(),
+          };
+
+          if (existingIdx >= 0) {
+            wardrobe[existingIdx] = normalizedItem;
+          } else {
+            wardrobe.push(normalizedItem);
+          }
+        }
+        saveWardrobe(wardrobe);
+      }
+
+      // Merge incoming outfits
+      if (Array.isArray(outfits) && outfits.length > 0) {
+        for (const o of outfits) {
+          if (!o.id) continue;
+          const existingIdx = savedOutfits.findIndex((x) => x.id === o.id);
+          if (existingIdx >= 0) {
+            savedOutfits[existingIdx] = { ...o, email: userEmail };
+          } else {
+            savedOutfits.push({ ...o, email: userEmail });
+          }
+        }
+        saveOutfits(savedOutfits);
+      }
+
+      // Return the consolidated server wardrobe and outfits for this user
+      const userWardrobe = wardrobe
+        .filter((i) => i.email.toLowerCase() === userEmail)
+        .sort((a, b) => b.createdAt - a.createdAt);
+
+      const userOutfits = savedOutfits
+        .filter((o) => o.email.toLowerCase() === userEmail)
+        .sort((a, b) => b.createdAt - a.createdAt);
+
+      res.json({
+        success: true,
+        wardrobe: userWardrobe,
+        outfits: userOutfits,
+        syncedAt: Date.now(),
+      });
+    } catch (err: any) {
+      console.error('POST /api/sync/vault error:', err);
+      res.status(500).json({ error: 'Vault sync failed', details: err.message });
+    }
+  });
+
+  // Ephemeral 6-digit PIN transfer cache for Mobile <-> PC instant sync
+  const syncCodesCache = new Map<string, { email: string; items: GarmentItem[]; outfits: SavedOutfit[]; createdAt: number }>();
+
+  app.post('/api/sync/exchange/generate', (req: Request, res: Response) => {
+    try {
+      const { email, items, outfits } = req.body;
+      if (!email) {
+        res.status(400).json({ error: 'Email required' });
+        return;
+      }
+      // Generate 6-digit PIN
+      const pin = Math.floor(100000 + Math.random() * 900000).toString();
+      syncCodesCache.set(pin, {
+        email: email.toLowerCase().trim(),
+        items: Array.isArray(items) ? items : [],
+        outfits: Array.isArray(outfits) ? outfits : [],
+        createdAt: Date.now(),
+      });
+
+      // Cleanup codes older than 15 minutes
+      const now = Date.now();
+      for (const [code, val] of syncCodesCache.entries()) {
+        if (now - val.createdAt > 15 * 60 * 1000) {
+          syncCodesCache.delete(code);
+        }
+      }
+
+      res.json({ success: true, pin, expiresInMinutes: 15 });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/sync/exchange/claim', (req: Request, res: Response) => {
+    try {
+      const { pin } = req.body;
+      if (!pin) {
+        res.status(400).json({ error: 'PIN is required' });
+        return;
+      }
+      const data = syncCodesCache.get(pin.trim());
+      if (!data) {
+        res.status(404).json({ error: 'Código inválido o expirado. Genera uno nuevo en tu móvil.' });
+        return;
+      }
+
+      // Also persist to server database immediately
+      const wardrobe = readWardrobe();
+      for (const item of data.items) {
+        const idx = wardrobe.findIndex((w) => w.id === item.id);
+        if (idx >= 0) wardrobe[idx] = item;
+        else wardrobe.push(item);
+      }
+      saveWardrobe(wardrobe);
+
+      res.json({
+        success: true,
+        email: data.email,
+        items: data.items,
+        outfits: data.outfits,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -535,6 +688,105 @@ Devuelve un JSON con:
         advice: 'Las proporciones y colores se complementan de manera óptima para la ocasión.',
         creatorTip: 'Tip de Yoni Mikel: La confianza es la mejor prenda; mantén los contrastes limpios.',
       });
+    }
+  });
+
+  // AI Full-Body Model Dressing Engine with Gemini Image Generation & Editing
+  app.post('/api/ai/dress-model', async (req: Request, res: Response) => {
+    try {
+      const { gender, occasion, pieces } = req.body;
+      if (!pieces || !pieces.superior || !pieces.inferior) {
+        res.status(400).json({ error: 'At least superior and inferior pieces are required' });
+        return;
+      }
+
+      if (!ai || !process.env.GEMINI_API_KEY) {
+        res.json({ success: false, fallback: true, reason: 'AI key not available' });
+        return;
+      }
+
+      const promptParts: any[] = [];
+      const superiorTitle = pieces.superior?.title || 'prenda superior';
+      const inferiorTitle = pieces.inferior?.title || 'pantalón';
+      const calzadoTitle = pieces.calzado?.title || 'calzado';
+      const accesorioTitle = pieces.accesorio?.title || pieces.abrigo?.title || 'accesorio';
+
+      const genderLabel = gender === 'mujer' ? 'mujer modelo de alta costura' : 'hombre modelo de alta costura';
+      const descPrompt = `Fotografía editorial de alta costura. Un ${genderLabel} ficticio de cuerpo completo (full body shot, de cabeza a pies, de pie en un estudio minimalista con iluminación suave de pasarela) vistiendo un outfit coordinado:
+1. Parte superior: ${superiorTitle} (${pieces.superior?.color || ''})
+2. Pantalón: ${inferiorTitle} (${pieces.inferior?.color || ''})
+3. Calzado: ${calzadoTitle} (${pieces.calzado?.color || ''})
+4. Complemento/Accesorio: ${accesorioTitle} (${pieces.accesorio?.color || ''})
+Estilo para ocasión: ${occasion || 'casual'}.
+La silueta debe ser realista, proporción humana natural, cuerpo entero visible incluyendo zapatos apoyados en el suelo.`;
+
+      // Helper to convert base64 or read from disk if local path
+      const addImagePart = (imgUrl: string | undefined, label: string) => {
+        if (!imgUrl) return;
+        try {
+          if (imgUrl.startsWith('data:image/')) {
+            const parts = imgUrl.split(';base64,');
+            promptParts.push({
+              inlineData: {
+                mimeType: parts[0].replace('data:', '') || 'image/jpeg',
+                data: parts[1],
+              },
+            });
+          } else if (imgUrl.startsWith('/api/images/')) {
+            const filename = imgUrl.replace('/api/images/', '');
+            const filePath = path.join(IMAGES_DIR, filename);
+            if (fs.existsSync(filePath)) {
+              const buffer = fs.readFileSync(filePath);
+              const ext = filename.endsWith('.png') ? 'image/png' : 'image/jpeg';
+              promptParts.push({
+                inlineData: {
+                  mimeType: ext,
+                  data: buffer.toString('base64'),
+                },
+              });
+            }
+          }
+        } catch (e) {
+          console.warn(`Could not add image part for ${label}:`, e);
+        }
+      };
+
+      addImagePart(pieces.superior?.imageUrl, 'superior');
+      addImagePart(pieces.inferior?.imageUrl, 'inferior');
+      addImagePart(pieces.calzado?.imageUrl, 'calzado');
+      addImagePart(pieces.accesorio?.imageUrl || pieces.abrigo?.imageUrl, 'accesorio');
+
+      promptParts.push({ text: descPrompt });
+
+      // Call gemini-3.1-flash-lite-image with a 7-second race timeout
+      const generatePromise = ai.models.generateContent({
+        model: 'gemini-3.1-flash-lite-image',
+        contents: {
+          parts: promptParts,
+        },
+      });
+
+      const timeoutPromise = new Promise<null>((_, reject) =>
+        setTimeout(() => reject(new Error('AI image generation timeout')), 7500)
+      );
+
+      const response: any = await Promise.race([generatePromise, timeoutPromise]);
+
+      if (response?.candidates?.[0]?.content?.parts) {
+        for (const part of response.candidates[0].content.parts) {
+          if (part.inlineData?.data) {
+            const mime = part.inlineData.mimeType || 'image/png';
+            const imageUrl = `data:${mime};base64,${part.inlineData.data}`;
+            res.json({ success: true, imageUrl, method: 'gemini-image' });
+            return;
+          }
+        }
+      }
+
+      res.json({ success: false, fallback: true, reason: 'No image candidate in response' });
+    } catch (err: any) {
+      console.warn('AI dress model warning, using studio canvas compositor:', err.message);
+      res.json({ success: false, fallback: true, error: err.message });
     }
   });
 
